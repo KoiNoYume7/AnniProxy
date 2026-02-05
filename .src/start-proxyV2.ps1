@@ -1,0 +1,222 @@
+# Requires: PowerShell 7+
+
+# ===================== #
+# Yumehana Secure Proxy #
+# ===================== #
+
+[CmdletBinding()]
+param(
+    [switch]$NoLogo = $false,
+
+    [ValidateSet("INFO","OK","WARN","ERROR","ALL")]
+    [string]$LogLevel = "ALL",
+
+    [switch]$NoTimestamp = $false
+)
+
+# ---- Paths ---- #
+$BaseDir    = Split-Path -Parent $PSScriptRoot
+$Cloudflared = Join-Path $BaseDir ".bin\cloudflared\cloudflared.exe"
+$Brave       = Join-Path $BaseDir ".bin\brave-portable\brave-portable.exe"
+$LogDir      = Join-Path $BaseDir ".logs"
+$LogoScript  = Join-Path $PSScriptRoot "LogoASCII.ps1"
+$LockFile    = Join-Path $BaseDir ".session.lock"
+
+# ---- SSH / Proxy config ---- #
+$SocksPort = 1080
+$SshUser   = "akira"
+$SshHost   = "yme-04.yumehana.dev"
+
+# ---- Init logging ---- #
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Path $LogDir | Out-Null
+}
+
+$Timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$LogFile   = Join-Path $LogDir "session-$Timestamp.log"
+
+# ---- Window title ---- #
+$Host.UI.RawUI.WindowTitle = "Yumehana Secure Proxy"
+
+# ---- Logo ---- #
+if (-not $NoLogo -and (Test-Path $LogoScript)) {
+    try {
+        . $LogoScript
+        Show-AnniArt
+    } catch {
+        # Logo is cosmetic, never fatal
+    }
+}
+
+# ================= #
+# Logging utilities #
+# ================= #
+
+function Format-LogLine {
+    param(
+        [string]$Message,
+        [string]$Level
+    )
+
+    $timePart = if ($NoTimestamp) { "" } else { "[{0}]" -f (Get-Date -Format "HH:mm:ss") }
+    return "$timePart[$Level] $Message"
+}
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [ValidateSet("INFO","OK","WARN","ERROR")]
+        [string]$Level = "INFO"
+    )
+
+    if ($LogLevel -ne "ALL" -and $LogLevel -ne $Level) {
+        return
+    }
+
+    $line = Format-LogLine -Message $Message -Level $Level
+
+    switch ($Level) {
+        "INFO"  { Write-Host $line -ForegroundColor Cyan }
+        "OK"    { Write-Host $line -ForegroundColor Green }
+        "WARN"  { Write-Host $line -ForegroundColor Yellow }
+        "ERROR" { Write-Host $line -ForegroundColor Red }
+    }
+
+    Add-Content -Path $LogFile -Value $line
+}
+
+function Message {
+    param([string]$Text)
+
+    Write-Host ""
+    Write-Host ">>> $Text" -ForegroundColor Blue
+    Write-Host ""
+}
+
+# ===================== #
+# Single session guard  #
+# ===================== #
+
+if (Test-Path $LockFile) {
+    try {
+        $existingPid = Get-Content $LockFile | ForEach-Object { [int]$_ }
+        if (Get-Process -Id $existingPid -ErrorAction SilentlyContinue) {
+            Message "Another session is already running. Please close it first."
+            exit 1
+        }
+    } catch {
+        # Corrupt lock file, ignore
+    }
+
+    Remove-Item $LockFile -Force -ErrorAction SilentlyContinue
+}
+
+Set-Content -Path $LockFile -Value $PID
+
+# ===================== #
+# Main runtime          #
+# ===================== #
+
+try {
+    $HadErrors = $false
+    Write-Log "Starting secure proxy session"
+
+    if (-not (Test-Path $Cloudflared)) {
+        Write-Log "cloudflared.exe not found" "ERROR"
+        $HadErrors = $true
+    }
+
+    if (-not (Test-Path $Brave)) {
+        Write-Log "Brave Portable not found" "ERROR"
+        $HadErrors = $true
+    }
+
+    if ($HadErrors) {
+        Message "Startup failed. Please verify your installation."
+        exit 1
+    }
+
+    # ---- Start SSH SOCKS tunnel ---- #
+    Write-Log "Launching SSH SOCKS tunnel on port $SocksPort"
+    Write-Log "Waiting for SSH authentication"
+
+    $SshArgs = @(
+        "-N",
+        "-D", "127.0.0.1:$SocksPort",
+        "-o", "ProxyCommand=`"$Cloudflared access ssh --hostname %h`"",
+        "$SshUser@$SshHost"
+    )
+
+    $SshProcess = Start-Process `
+        -FilePath "ssh.exe" `
+        -ArgumentList $SshArgs `
+        -NoNewWindow `
+        -PassThru
+
+    function Test-Socks {
+        try {
+            $client = [System.Net.Sockets.TcpClient]::new()
+            $client.Connect("127.0.0.1", $SocksPort)
+            $client.Close()
+            return $true
+        } catch {
+            return $false
+        }
+    }
+
+    Write-Log "Waiting for proxy to become available... (timeout: 20s)"
+    Message "Please provide SSH authentication if prompted"
+
+    $Ready = $false
+    for ($i = 1; $i -le 20; $i++) {
+        if (Test-Socks) {
+            $Ready = $true
+            break
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    if (-not $Ready) {
+        Write-Log "SOCKS proxy did not become available" "ERROR"
+        Message "Authentication failed or timed out."
+        exit 1
+    }
+
+    Write-Log "SOCKS proxy is live on localhost:$SocksPort" "OK"
+
+    # ---- Launch Brave ---- #
+    Write-Log "Launching Brave Portable"
+
+    $BraveProcess = Start-Process `
+        -FilePath $Brave `
+        -ArgumentList "--proxy-server=socks5://127.0.0.1:$SocksPort" `
+        -PassThru
+
+    Message "Everything is set up and running. Enjoy!"
+
+    # ---- Monitor ---- #
+    while ($true) {
+        if ($SshProcess.HasExited) {
+            Write-Log "SSH tunnel closed, shutting down browser" "WARN"
+            try { $BraveProcess.CloseMainWindow() | Out-Null } catch {}
+            Start-Sleep -Seconds 2
+            try { $BraveProcess.Kill() } catch {}
+            break
+        }
+
+        if ($BraveProcess.HasExited) {
+            Write-Log "Browser closed by user, shutting down tunnel" "WARN"
+            try { $SshProcess.Kill() } catch {}
+            break
+        }
+
+        Start-Sleep -Seconds 1
+    }
+}
+finally {
+    if (Test-Path $LockFile) {
+        Remove-Item $LockFile -Force
+    }
+}
+
+# --- end of start-proxy.ps1 --- #
