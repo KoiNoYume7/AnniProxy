@@ -1,4 +1,7 @@
 .bin/
 .tmp/
 .logs/
+.release/
+.archive/
 .session.lock
+*.exe
