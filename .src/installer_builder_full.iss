@@ -3,10 +3,11 @@
 ; Non-commercial use only
 
 #define MyAppName "AnniProxy"
-#define MyAppVersion "1.5"
+#define MyAppVersion "a2.0"
 #define MyAppPublisher "Yumehana"
 #define MyAppURL "https://www.yumehana.dev"
-#define MyAppExeName "proxy.bat"
+#define MyAppExeName "run.bat"
+#define ProjectRoot ".."
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
@@ -21,13 +22,13 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={localappdata}\Yumehana\{#MyAppName}
 DisableProgramGroupPage=yes
-LicenseFile=D:\.src\AnniProxy\LICENSE
+LicenseFile={#ProjectRoot}\LICENSE.txt
 ; Remove the following line to run in administrative install mode (install for all users).
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=D:\.src\AnniProxy\.release
-OutputBaseFilename=AnniProxy_Setup
-SetupIconFile=D:\.src\AnniProxy\.assets\logo.ico
+OutputDir={#ProjectRoot}\.release
+OutputBaseFilename=AnniProxy_Setup_Offline_v{#MyAppVersion}
+SetupIconFile={#ProjectRoot}\.assets\icon.ico
 SolidCompression=yes
 WizardStyle=modern dynamic windows11
 
@@ -35,12 +36,13 @@ WizardStyle=modern dynamic windows11
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "D:\.src\AnniProxy\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\.src\AnniProxy\.src\*"; DestDir: "{app}\.src"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "D:\.src\AnniProxy\.bin\*"; DestDir: "{app}\.bin"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "D:\.src\AnniProxy\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\.src\AnniProxy\README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "D:\.src\AnniProxy\.assets\logo.ico"; DestDir: "{app}\.assets"; Flags: ignoreversion
+Source: "{#ProjectRoot}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ProjectRoot}\.src\*"; DestDir: "{app}\.src"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#ProjectRoot}\.config\*"; DestDir: "{app}\.config"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".secret\*"
+Source: "{#ProjectRoot}\.assets\*"; DestDir: "{app}\.assets"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#ProjectRoot}\.bin\*"; DestDir: "{app}\.bin"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#ProjectRoot}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ProjectRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -48,4 +50,3 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: shellexec postinstall skipifsilent
-

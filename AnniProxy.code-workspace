@@ -1,8 +1,34 @@
 {
 	"folders": [
 		{
+			"name": "AnniProxy (main)",
 			"path": "."
+		},
+		{
+			"name": "AnniProxy (backup)",
+			"description": "Backup of original AnniProxy project (pre-refactor) and previous release artifacts",
+			"path": "../AnniProxy.bak"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"files.exclude": {
+			"**/.git": false,
+			"**/.bak": false,
+			"**/.bin": true,
+			"**/.log/.archive": true,
+			"**/.release": false
+		},
+		"workbench.startupEditor": "readme",
+		"workbench.editor.restoreViewState": true,
+		"powershell.cwd": "AnniProxy (main)"
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-vscode.powershell",
+			"jjonesmicro.inno",
+			"ms-vscode.batch",
+			"CTC.vscode-tree-extension",
+			"starlitxiling.bak-syntax-highlighter"
+		]
+	}
 }

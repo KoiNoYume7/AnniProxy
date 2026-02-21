@@ -1,7 +1,12 @@
 .bin/
 .tmp/
-.logs/
+.dat/
+.log/
+.temp/
 .release/
 .archive/
 .session.lock
 *.exe
+test.ps1
+.secret/
+.config/.secret/
