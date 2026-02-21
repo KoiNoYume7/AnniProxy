@@ -1,13 +1,16 @@
 
 # AnniProxy
 
-AnniProxy is a Windows PowerShell 7+ launcher that:
+AnniProxy is a proxy-browser with a proxy connection to my server. It works like this:
 
 - Starts a Cloudflared Access SSH proxy command
 - Starts an SSH SOCKS5 tunnel on `127.0.0.1:<port>`
 - Launches Brave Portable with the SOCKS proxy configured
 
-It is designed to work on barebones Windows environments (for example Windows 11 Sandbox) by bootstrapping missing dependencies and by keeping secrets out of the repository.
+It is designed to work on barebones Windows environments (for example fresh win11 installations or VMs) by bootstrapping all missing dependencies.
+
+> It is supposed to be a proxy to my server, but currently I am working on hardening security, cause I don't want to compromise on security on both client and server side.
+> So until the, you gotta provide your own server.
 
 ## Quick start (Windows)
 
@@ -40,17 +43,27 @@ Commit-safe configuration:
 
 ### `.config/ssh.json`
 
-Commit-safe SSH parameters:
+SSH parameters:
 
 - `user`, `host`, `socksPort`
 - `identityFile` (path to private key)
 - `knownHostsFile`
 
+> note: I haven't implemented a way to automatically generate these files, so you'll need to create them manually and therefore use your own server.
+> But I am working on implementing a way to find a good authentication method.
+> This is as of alpha version 2.0, in case I forget to update this readme (again).
+
 These are paths only and must point to gitignored locations.
 
-## Secrets & SSH key authentication (recommended)
+## Credentials & access model (no shared secrets)
 
-To avoid interactive SSH prompts/windows, use key-based authentication.
+The plan to integrate better authentication methods is to use Cloudflare Access with SSO (Google, Microsoft, etc.).
+
+- Access is controlled via **Cloudflare Access** (the `cloudflared access ssh` proxy flow).
+- Users authenticate with Access policy (email/IdP group).
+- Revocation is immediate: remove the user from the Access allow-list/group.
+
+> **Important**: To implement this might take a while, because I don't want to compromise on security on both client and server side.
 
 ### Where to store keys
 
@@ -78,7 +91,7 @@ This creates:
 
 ### Install the public key on your server (Raspberry Pi)
 
-On the Pi:
+On the Pi (or any machine you want to use as the proxy server):
 
 ```bash
 mkdir -p ~/.ssh
@@ -117,28 +130,16 @@ SSH / Brave stdout+stderr are written to per-session files (when started non-int
 
 - `.log\.archive\`
 
-## What gets committed
-
-- `.config/*.json` (commit-safe)
-- `.src/*.ps1` (source)
-- `run.bat`
-
-## What must never be committed
-
-- `.config/.secret/` (private keys, known_hosts)
-- `.secret/`
-- `.log/`, `.tmp/`, `.bin/`
-
 ## Installer (Inno Setup)
 
 The Inno Setup script currently lives at:
 
 - `.src/installer_builder.iss`
+and there is another version called `installer_builder_full.iss` which bundles all the `.bin` files into the installer for offline installation.
 
-The installer should include only commit-safe files. It should not ship:
+> Note: you need to have the .bin files already downloaded to package it with the .iss script. 
+> I might implement the builded version with everything in the github release, but I need to research some more about if I am even allowed to do that.
 
-- `.config/.secret/`
-- `.log/`
-- `.tmp/`
+### Last updated
 
-If you build an installer for distribution, ensure it copies `.config` and `.src` and the launcher batch file, and lets the app bootstrap binaries on first run.
+Last updated: 2026-02-21

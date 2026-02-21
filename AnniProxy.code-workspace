@@ -6,14 +6,13 @@
 		},
 		{
 			"name": "AnniProxy (backup)",
-			"description": "Backup of original AnniProxy project (pre-refactor) and previous release artifacts",
+			"description": "Backup of original AnniProxy project (pre-refactor) and previous release artifacts | IGNORE THIS IF YOU DON'T HAVE THAT FOLDER",
 			"path": "../AnniProxy.bak"
 		}
 	],
 	"settings": {
 		"files.exclude": {
 			"**/.git": false,
-			"**/.bak": false,
 			"**/.bin": true,
 			"**/.log/.archive": true,
 			"**/.release": false
@@ -27,7 +26,6 @@
 			"ms-vscode.powershell",
 			"jjonesmicro.inno",
 			"ms-vscode.batch",
-			"CTC.vscode-tree-extension",
 			"starlitxiling.bak-syntax-highlighter"
 		]
 	}

@@ -1,6 +1,6 @@
 {
-  "user": "akira",
-  "host": "yme-04.yumehana.dev",
+  "user": "anniproxy",
+  "host": "your-ssh-access-hostname.example.com",
   "socksPort": 1080,
   "identityFile": ".config/.secret/id_ed25519",
   "knownHostsFile": ".config/.secret/known_hosts"
