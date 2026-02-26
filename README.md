@@ -1,145 +1,105 @@
-
 # AnniProxy
 
-AnniProxy is a proxy-browser with a proxy connection to my server. It works like this:
+AnniProxy is a secure Windows proxy-browser that tunnels traffic through your own SSH server (optionally via Cloudflare Access / Zero Trust, when configured). It bundles a SOCKS5 tunnel and a portable Brave browser for minimal-dependency environments like fresh Windows installs or VMs.
 
-- Starts a Cloudflared Access SSH proxy command
-- Starts an SSH SOCKS5 tunnel on `127.0.0.1:<port>`
-- Launches Brave Portable with the SOCKS proxy configured
+> ⚠️ This software is designed for **personal use with your own server**. Do not expose or share SSH keys publicly. Security is a top priority.
 
-It is designed to work on barebones Windows environments (for example fresh win11 installations or VMs) by bootstrapping all missing dependencies.
+## Features
 
-> It is supposed to be a proxy to my server, but currently I am working on hardening security, cause I don't want to compromise on security on both client and server side.
-> So until the, you gotta provide your own server.
+- Automatic bootstrap of dependencies: PowerShell 7, cloudflared, Brave Portable.
+- SSH SOCKS5 tunnel on `127.0.0.1:<port>`.
+- Launches Brave with local SOCKS proxy.
+- Single-instance enforcement via `.session.lock`.
+- Detailed logging and automatic log retention.
+- Designed for barebones Windows setups (VMs or fresh installs).
 
-## Quick start (Windows)
+## Quick Start (Windows)
 
-- Run `run.bat`
-
-`run.bat` is the only entry point you should need.
-
-It will:
-
-- Find PowerShell 7 in this order:
-  - Bundled: `.bin\pwsh7+\pwsh.exe`
-  - System PATH: `pwsh`
-  - Optional Scoop install (if enabled in config)
-  - Manual bootstrap from the zip URL in `.config\config.json`
-- Generate `.tmp\bootstrap.ps1` and run PowerShell via `-File` (avoids cmd.exe quoting edge cases)
-- Always write a transcript to `.log\bootstrap.log`
+1. Run `run.bat`.
+2. The script will:
+   - Locate or bootstrap PowerShell 7.
+   - Generate `.tmp\bootstrap.ps1` for deterministic startup.
+   - Download or use cached binaries (`cloudflared`, `Brave`, 7zip).
+   - Start SSH tunnel and validate SOCKS readiness.
+   - Launch Brave configured to use `127.0.0.1:<port>` SOCKS proxy.
+   - Monitor SSH & Brave lifecycle; shutdown coordinated on exit.
 
 ## Configuration
 
-### `.config/config.json`
+### `.config/config.json` (commit-safe)
 
-Commit-safe configuration:
+- `cloudflaredUrl`, `brave7zUrl`, `7zUrl`, `pwsh7.5.4Url`
+- `useScoop`: enable optional Scoop installation
+- Other runtime options: `noLogo`, `logLevel`, `noTimestamp`, `offlineSSHTest`
 
-- Download URLs for:
-  - `cloudflared`
-  - Brave Portable archive
-  - PowerShell 7 zip (optional bootstrap)
-  - Portable OpenSSH zip (optional bootstrap)
-- `useScoop` controls whether Scoop installation is attempted
-
-### `.config/ssh.json`
-
-SSH parameters:
+### `.config/ssh.json` (placeholder-safe)
 
 - `user`, `host`, `socksPort`
-- `identityFile` (path to private key)
-- `knownHostsFile`
+- `identityFile`, `knownHostsFile` (gitignored, required)
+  
+> You must provide your own server. Automatic key generation not yet implemented.
 
-> note: I haven't implemented a way to automatically generate these files, so you'll need to create them manually and therefore use your own server.
-> But I am working on implementing a way to find a good authentication method.
-> This is as of alpha version 2.0, in case I forget to update this readme (again).
+### Secrets
 
-These are paths only and must point to gitignored locations.
+- Private keys: `.config/.secret/` (preferred)
+- Also supported: `.secret/` (ignored)
+- Never commit secrets or real server credentials.
 
-## Credentials & access model (no shared secrets)
-
-The plan to integrate better authentication methods is to use Cloudflare Access with SSO (Google, Microsoft, etc.).
-
-- Access is controlled via **Cloudflare Access** (the `cloudflared access ssh` proxy flow).
-- Users authenticate with Access policy (email/IdP group).
-- Revocation is immediate: remove the user from the Access allow-list/group.
-
-> **Important**: To implement this might take a while, because I don't want to compromise on security on both client and server side.
-
-### Where to store keys
-
-This repo expects secrets under:
-
-- `.config/.secret/` (gitignored)
-
-Also ignored:
-
-- `.secret/`
-
-### Generate a key pair (Windows)
-
-In PowerShell 7:
+## Generating Key Pair (Windows)
 
 ```powershell
-mkdir .config\.secret -Force | Out-Null
-ssh-keygen -t ed25519 -f .config\.secret\id_ed25519 -N ""
+mkdir .config/.secret -Force
+ssh-keygen -t ed25519 -f .config/.secret/id_ed25519 -N ""
 ```
+Install the public key on your server:
 
-This creates:
-
-- `.config/.secret/id_ed25519` (private key)
-- `.config/.secret/id_ed25519.pub` (public key)
-
-### Install the public key on your server (Raspberry Pi)
-
-On the Pi (or any machine you want to use as the proxy server):
+On a Linux server (recommended), run:
 
 ```bash
 mkdir -p ~/.ssh
 chmod 700 ~/.ssh
 cat >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
+# Paste id_ed25519.pub content, then press Ctrl+D
 ```
 
-Paste the contents of `id_ed25519.pub`, then press Ctrl+D.
+Alternatively, if your server supports it, you can use:
 
-### Known hosts file
+```bash
+ssh-copy-id -i id_ed25519.pub <user>@<host>
+```
 
-AnniProxy can write/use a dedicated known_hosts file:
+## Logs & Troubleshooting
 
-- `.config/.secret/known_hosts`
+* `.log/session/` – session logs
+* `.log/ssh/` – SSH stdout/stderr
+* `.log/brave/` – Brave stdout/stderr
+* Archived logs: `.log/.archive/` (never deleted)
 
-## Logs & troubleshooting
-
-### Bootstrap transcript
-
-If `run.bat` fails early, check:
-
-- `.log\bootstrap.log`
-
-### Runtime logs
-
-Session logs are written to:
-
-- `.log\session-YYYYMMDD-HHMMSS.log`
-
-SSH / Brave stdout+stderr are written to per-session files (when started non-interactively).
-
-### Log retention
-
-`.log` is capped to 10 files; old logs are moved to:
-
-- `.log\.archive\`
+Check `.log/bootstrap.log` if `run.bat` fails early.
 
 ## Installer (Inno Setup)
 
-The Inno Setup script currently lives at:
+* `.src/installer_builder.iss` – build installer
+* `.release/AnniProxy_Setup_v1.0.0.exe` – example output
+* Requires `.bin/` files for offline build
 
-- `.src/installer_builder.iss`
-and there is another version called `installer_builder_full.iss` which bundles all the `.bin` files into the installer for offline installation.
+## Security & Access Model
 
-> Note: you need to have the .bin files already downloaded to package it with the .iss script. 
-> I might implement the builded version with everything in the github release, but I need to research some more about if I am even allowed to do that.
+* Can use **Cloudflare Access** for authentication (when configured).
+* Revocation is immediate via Access allow-lists.
+* Localhost-only SOCKS proxy; no shared secrets in repo.
 
-### Last updated
+## Developer Notes
 
-Last updated: 2026-02-21
+* PowerShell 7+ only; single-instance enforced.
+* Logging structured; never replace `Write-Log`.
+* Lifecycle coupling: SSH/Brave must shut down together.
+* Window hiding: SSH auth console only; main console (`wt.exe`) safe.
+
+## License
+
+Licensed under Apache 2.0. See LICENSE.txt.
+
+Last Updated
+2026-02-26
