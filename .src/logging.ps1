@@ -12,7 +12,7 @@ function Write-Log {
     param (
         [string]$Message,
         [ValidateSet("INFO", "OK", "WARN", "ERROR", "ALL")]
-        [string]$Level = "ALL"
+        [string]$Level = "INFO"
     )
 
     if ($Global:CurrentLogLevelPriority -gt $Global:LogLevelPriority[$Level]) {
@@ -22,7 +22,7 @@ function Write-Log {
     $timePrefix = if (-not $Global:SuppressTimestamp) { ("[{0:HH:mm:ss}]" -f (Get-Date)) + " " } else { "" }
 
     $colorMap = @{
-        "INFO" = "White"
+        "INFO" = "Cyan"
         "OK"   = "Green"
         "WARN" = "Yellow"
         "ERROR"= "Red"
@@ -30,11 +30,14 @@ function Write-Log {
     }
 
     $color = $colorMap[$Level]
-    Write-Host "${timePrefix$Level}: $Message" -ForegroundColor $color
+    $consoleLine = "{0}[{1}] {2}" -f $timePrefix, $Level, $Message
+    Write-Host $consoleLine -ForegroundColor $color
 
     if ($Global:LogFile) {
-        $logLine = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
-        Add-Content -Path $Global:LogFile -Value $logLine
+        try {
+            $logLine = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
+            Add-Content -Path $Global:LogFile -Value $logLine -Encoding UTF8 -ErrorAction SilentlyContinue
+        } catch {}
     }
 }
 
