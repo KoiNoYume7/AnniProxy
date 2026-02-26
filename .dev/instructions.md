@@ -7,6 +7,79 @@
 
 **Configuration**: Runtime behavior is driven primarily by `.config/config.json` and `.config/ssh.json`.
 
+**Log organization (current)**: logs are grouped into subfolders under `.log/`:
+
+- **`.log/session/`**: AnniProxy session logs (`session-YYYYMMDD-HHMMSS.log`)
+- **`.log/ssh/`**: SSH stdout/stderr capture (`ssh-*.log` / `ssh-*.err`)
+- **`.log/brave/`**: Brave stdout/stderr capture (`brave-*.log` / `brave-*.err`)
+
+Old logs are archived (never deleted) into **`.log/.archive/<category>/`**.
+
+---
+
+## SSH TUNNEL IMPLEMENTATION (AUTHORITATIVE)
+
+### `Start-SshSocksTunnel` (`.src/ssh-tunnel.ps1`)
+
+This function encapsulates all SSH startup logic and is the authoritative place to change SSH args.
+
+Behavior:
+
+- **Preferred**: key auth (non-interactive)
+  - Uses `-i <identity>`
+  - Uses `BatchMode=yes` to fail fast when key auth is not possible
+  - Captures stdout/stderr into `.log/ssh/ssh-<timestamp>.log` and `.log/ssh/ssh-<timestamp>.err`
+- **Fallback**: interactive auth
+  - Launches `ssh.exe` in a separate console window so the user can type password/confirm prompts
+  - Waits for SOCKS readiness up to 600s
+
+Readiness:
+
+- Uses `Wait-ForSocksReady` which checks:
+  - the SSH process is still alive
+  - the SOCKS port is accepting connections (via `Test-SocksPort` in `guard.ps1`)
+
+Invariants:
+
+- Never change the SOCKS bind host away from `127.0.0.1`.
+- Never remove the monitoring loop in `main.ps1` that ties SSH+Brave lifecycles together.
+
+## SSH AUTH WINDOW HIDING (AUTHORITATIVE)
+
+### Goal
+
+After interactive SSH authentication completes (tunnel ready), hide the separate SSH auth console window so it does not remain visible/minimized for the user.
+
+### Constraints / Safety
+
+- **Never hide the main AnniProxy console.**
+- When `-Action Hide` is used we intentionally do **not** hide `wt.exe` / `WindowsTerminal.exe` because doing so can hide the entire terminal hosting AnniProxy.
+
+### Implementation (`.src/window-utils.ps1`)
+
+`Minimize-ProcessWindow -Action Hide`:
+
+- Attempts to hide the process window directly.
+- Attempts child `conhost.exe` (classic console host).
+- Walks the process tree from `ssh.exe` and looks for descendant console hosts.
+- If `MainWindowHandle` is zero (common), it uses Win32 APIs:
+  - `EnumWindows`
+  - `GetWindowThreadProcessId`
+  - then calls `ShowWindowAsync(hwnd, SW_HIDE)`
+
+The combination of process-tree traversal + `EnumWindows` is required for reliability.
+
+## LOG RETENTION / ARCHIVING (AUTHORITATIVE)
+
+### `Invoke-LogRetention` (`.src/log-retention.ps1`)
+
+- Keeps the newest `MaxFiles` in each active category folder:
+  - `.log/session`
+  - `.log/ssh`
+  - `.log/brave`
+- Moves older files into `.log/.archive/<category>/` (never deletes).
+- Moves any legacy root-level log files in `.log/` into `.log/.archive/legacy/`.
+
 ---
 
 ## ARCHITECTURE & DATA FLOW
@@ -63,12 +136,21 @@ Result: User has Brave browser with all traffic tunneled through SSH/Cloudflare
 ```
 main.ps1 (entry point, coordinates all)
   ├─ logging.ps1 (Write-Log, Format-LogLine, Initialize-LogFile)
-  │   └─ Writes to: .log/session-YYYYMMDD-HHMMSS.log
+  │   └─ Writes to: .log/session/session-YYYYMMDD-HHMMSS.log
+  ├─ log-retention.ps1 (Invoke-LogRetention)
+  │   └─ Archives old logs into: .log/.archive/<category>/
   ├─ guard.ps1 (Acquire-Lock, Release-Lock)
   │   └─ Manages: .session.lock (ephemeral PID file)
   ├─ console-guard.ps1 (Console-CloseRequested)
   └─ get-binaries.ps1 (Get-7ZipExe, Get-Binary)
       └─ Caches to: .bin/ (cloudflared/, brave-portable/, 7zip/)
+
+Other key modules (dot-sourced by main.ps1):
+
+- exe-resolvers.ps1 (Resolve-CloudflaredExe, Resolve-SshExe)
+- ssh-utils.ps1 (Wait-ForSocksReady, Get-FileTail, etc.)
+- ssh-tunnel.ps1 (Start-SshSocksTunnel + key-auth → interactive fallback)
+- window-utils.ps1 (Minimize-ProcessWindow -Action Minimize|Hide)
 ```
 
 ---
@@ -81,7 +163,7 @@ main.ps1 (entry point, coordinates all)
 
 **Key Global Variables** (set by main.ps1, used by all modules):
 ```
-$Global:LogFile = ".log/session-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
+$Global:LogFile = ".log/session/session-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
 $Global:CurrentLogLevelPriority = @('ERROR', 'WARN', 'INFO', 'OK')  # 0-3
 $Global:SuppressTimestamp = $false
 ```
@@ -112,6 +194,8 @@ Only paths and derived values are computed in `.src/main.ps1` (e.g. `.bin/`, `.l
   - `.secret/` (also supported)
 
 Never add private keys, known_hosts, tokens, etc. into committed files.
+
+**Important**: `.config/ssh.json` is committed and *must remain placeholder-safe*. Do not commit your real SSH username/host into the repo unless that is explicitly intended.
 
 **Execution Parameters (CLI args)**:
 - `-NoLogo` → Skip ASCII art output
@@ -195,9 +279,22 @@ function Write-Log {
 **File Layout**:
 ```
 .log/
-  ├─ session-20260209-143022.log
-  ├─ session-20260209-150145.log
-  └─ session-20260210-081500.log
+  ├─ session/
+  │  ├─ session-20260209-143022.log
+  │  └─ ...
+  ├─ ssh/
+  │  ├─ ssh-20260209-143022.log
+  │  ├─ ssh-20260209-143022.err
+  │  └─ ...
+  ├─ brave/
+  │  ├─ brave-20260209-143022.log
+  │  ├─ brave-20260209-143022.err
+  │  └─ ...
+  └─ .archive/
+     ├─ session/
+     ├─ ssh/
+     ├─ brave/
+     └─ legacy/
 ```
 
 **Color Codes** (PowerShell ConsoleColor):
@@ -701,8 +798,13 @@ AnniProxy/
   ├─ .src/
   │   ├─ main.ps1 (orchestrator)
   │   ├─ logging.ps1 (logging module)
+  │   ├─ log-retention.ps1 (archive old logs)
   │   ├─ guard.ps1 (lock/session module)
   │   ├─ get-binaries.ps1 (binary acquisition)
+  │   ├─ exe-resolvers.ps1 (resolve ssh/cloudflared locations)
+  │   ├─ ssh-utils.ps1 (tunnel readiness helpers)
+  │   ├─ ssh-tunnel.ps1 (start SSH + fallback auth)
+  │   ├─ window-utils.ps1 (hide/minimize SSH auth console)
   │   └─ installer_builder.iss (Inno Setup definition)
   ├─ .assets/
   │   ├─ LogoASCII.ps1 (ASCII art)
@@ -713,9 +815,10 @@ AnniProxy/
   │   ├─ brave-portable/ (downloaded & extracted)
   │   └─ 7zip/ (bundled 7zr.exe, if needed)
   ├─ .log/ (runtime-generated)
-  │   ├─ session-20260209-143022.log
-  │   ├─ session-20260209-150145.log
-  │   └─ (session-specific .log files)
+  │   ├─ session/ (AnniProxy logs)
+  │   ├─ ssh/ (ssh stdout/stderr)
+  │   ├─ brave/ (brave stdout/stderr)
+  │   └─ .archive/ (archived logs, never deleted)
   ├─ .session.lock (ephemeral, exists only during run)
   └─ .release/ (optional, build output)
       └─ AnniProxy_Setup_v1.0.0.exe
@@ -737,6 +840,33 @@ Before modifying code:
 - [ ] If adding a new module, ensure it dot-sources in main.ps1 and uses global logging
 - [ ] Test via `run.bat` or `pwsh -File .src/main.ps1` to verify no regressions
 
+## AI INVARIANTS (DO NOT BREAK THESE)
+
+If you are an AI modifying this repository, treat these as hard requirements:
+
+1. **PowerShell 7+ only**
+   - Keep the version guard in `main.ps1`.
+
+2. **Single instance enforcement must remain**
+   - The `.session.lock` mechanism (Acquire/Release) must remain authoritative.
+
+3. **Lifecycle coupling must remain**
+   - If SSH exits, the session must shut down.
+   - If Brave exits, the session must shut down.
+   - Always clean up in `finally`.
+
+4. **Secrets must never be committed**
+   - `identityFile` and `knownHostsFile` must point into gitignored paths.
+   - Keep `.config/ssh.json` placeholder-safe unless explicitly instructed.
+
+5. **Window hiding must never hide the main AnniProxy console**
+   - Never hide `wt.exe`/`WindowsTerminal.exe` as part of the Hide action.
+   - Prefer process-tree targeting + `EnumWindows` for console host windows.
+
+6. **Logging must remain structured**
+   - Session logs must go into `.log/session/`.
+   - Retention must archive into `.log/.archive/` (never delete).
+
 For binary/dependency changes:
 
 - [ ] Update URL in `.src/main.ps1` (e.g., `$CloudflaredUrl`, `$Brave7zUrl`)
@@ -751,5 +881,31 @@ For installer/packaging changes:
 - [ ] Rebuild and test installer (.exe) on clean Windows machine if possible
 
 ---
+
+## FOLLOW-UPS / KNOWN TODOs
+
+These are intentionally listed so a future AI can pick up work without prior chat context:
+
+1. **Reduce `LogLevel=ALL` noise**
+   - Some window-hide and SSH-start logs are currently written at `ALL` for debugging.
+   - Once stable, consider demoting to `INFO` (or gating behind a dedicated debug flag) while keeping WARN/ERROR signals.
+
+2. **Installer file list audit**
+   - The refactor added new `.src/*.ps1` modules.
+   - Ensure `installer_builder.iss` includes all required runtime files (`.src/*.ps1`, `.assets`, `run.bat`, `.config/*.json`).
+
+3. **`ShowExitPrompt` semantics**
+   - Confirm the intended UX:
+     - when to show “Press any key to exit…”
+     - how to behave after provisioning-triggered restart
+   - Keep shutdown behavior deterministic.
+
+4. **Windows Terminal edge cases**
+   - `Hide` intentionally avoids hiding `wt.exe`/`WindowsTerminal.exe` for safety.
+   - If future requirements demand hiding a WT tab only, it likely requires a different strategy (WT APIs), not Win32 window hiding.
+
+5. **Config placeholder safety**
+   - Keep `.config/ssh.json` placeholder-safe by default.
+   - If a deployment requires real values, document that as a separate private config step.
 
 **Last Updated**: February 2026 | **Target PowerShell**: 7.x+ | **Architecture**: Modular Orchestrator | **AI Optimization**: Comprehensive, structured for machine parsing and intent-driven modifications
