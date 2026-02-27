@@ -1,6 +1,8 @@
 # AnniProxy
 
-AnniProxy is a secure Windows proxy-browser that tunnels traffic through your own SSH server (optionally via Cloudflare Access / Zero Trust, when configured). It bundles a SOCKS5 tunnel and a portable Brave browser for minimal-dependency environments like fresh Windows installs or VMs.
+AnniProxy is a Windows launcher that starts a portable Brave browser with all traffic routed through a **localhost-only SOCKS5 proxy** backed by an **SSH tunnel**.
+
+It is designed to work in minimal environments (fresh Windows installs, VMs) by bootstrapping its runtime dependencies.
 
 > ⚠️ This software is designed for **personal use with your own server**. Do not expose or share SSH keys publicly. Security is a top priority.
 
@@ -12,6 +14,10 @@ AnniProxy is a secure Windows proxy-browser that tunnels traffic through your ow
 - Single-instance enforcement via `.session.lock`.
 - Detailed logging and automatic log retention.
 - Designed for barebones Windows setups (VMs or fresh installs).
+
+Optional:
+
+- Cloudflare Access / Zero Trust SSH ProxyCommand integration (toggleable in config).
 
 ## Quick Start (Windows)
 
@@ -31,13 +37,23 @@ AnniProxy is a secure Windows proxy-browser that tunnels traffic through your ow
 - `cloudflaredUrl`, `brave7zUrl`, `7zUrl`, `pwsh7.5.4Url`
 - `useScoop`: enable optional Scoop installation
 - Other runtime options: `noLogo`, `logLevel`, `noTimestamp`, `offlineSSHTest`
+- `useCloudflaredAccessProxy`: when `true` (default), SSH is launched with a Cloudflare Access `ProxyCommand`; when `false`, SSH connects directly.
 
-### `.config/ssh.json` (placeholder-safe)
+### `.config/ssh.json` (placeholder-safe; committed)
 
 - `user`, `host`, `socksPort`
 - `identityFile`, `knownHostsFile` (gitignored, required)
-  
-> You must provide your own server. Automatic key generation not yet implemented.
+
+This file is intentionally safe to commit. Put your real SSH values in the local override file:
+
+### `.config/ssh.local.json` (override; gitignored)
+
+- Same schema as `.config/ssh.json`.
+- Recommended keys to override:
+  - `user`
+  - `host`
+
+On first run, if only placeholders are present and `.config/ssh.local.json` is missing, AnniProxy will prompt you and create it.
 
 ### Secrets
 
@@ -47,10 +63,19 @@ AnniProxy is a secure Windows proxy-browser that tunnels traffic through your ow
 
 ## Generating Key Pair (Windows)
 
+Option A (recommended): let AnniProxy create the keypair
+
+```powershell
+pwsh -File .src/main.ps1 -ProvisionKeys
+```
+
+Option B: manual
+
 ```powershell
 mkdir .config/.secret -Force
 ssh-keygen -t ed25519 -f .config/.secret/id_ed25519 -N ""
 ```
+
 Install the public key on your server:
 
 On a Linux server (recommended), run:
@@ -78,6 +103,12 @@ ssh-copy-id -i id_ed25519.pub <user>@<host>
 
 Check `.log/bootstrap.log` if `run.bat` fails early.
 
+You can run diagnostics without starting the browser:
+
+```powershell
+pwsh -File .src/main.ps1 -HealthCheckOnly
+```
+
 ## Installer (Inno Setup)
 
 * `.src/installer_builder.iss` – build installer
@@ -100,6 +131,4 @@ Check `.log/bootstrap.log` if `run.bat` fails early.
 ## License
 
 Licensed under Apache 2.0. See LICENSE.txt.
-
-Last Updated
 2026-02-26

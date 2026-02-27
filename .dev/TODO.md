@@ -1,135 +1,73 @@
-# --- TODO.md --- #
+# AnniProxy TODO (AI-Optimized)
 
-# AnniProxy AI-Enhanced TODO
+This file is the forward-looking backlog for an AI agent working on this repository.
 
-This document is intended for an AI agent to understand and assist with the development, maintenance, and enhancement of AnniProxy. It is written in detail to encode knowledge of all modules, runtime behaviors, invariants, and configuration requirements.
+## 0. Hard invariants (never break)
+- PowerShell 7+ only
+- Single-instance enforcement via `.session.lock`
+- Lifecycle coupling: Brave + SSH tunnel must shut down together
+- Local SOCKS bind stays `127.0.0.1` only
+- Secrets never committed (`.config/.secret/`, `.secret/`)
+- `.config/ssh.json` stays placeholder-safe; real values belong in `.config/ssh.local.json`
+- Log retention archives (never deletes)
 
-# --- Project Overview --- #
+## 1. Packaging / Installer
+- Audit `.src/installer_builder.iss` includes for new modules:
+  - `.src/exe-resolvers.ps1`
+  - `.src/ssh-utils.ps1`
+  - `.src/window-utils.ps1`
+  - `.src/log-retention.ps1`
+  - `.src/ssh-tunnel.ps1`
+  - `.src/ssh-provision.ps1`
+  - `.src/healthcheck.ps1`
+- Ensure committed config files are included:
+  - `.config/config.json`
+  - `.config/ssh.json`
+- Ensure `.config/ssh.local.json` is never packaged as a tracked file (it is user-local).
 
-* **Name**: AnniProxy
-* **Purpose**: Secure Windows proxy-browser with SSH SOCKS5 tunneling (optionally using Cloudflare Access / Zero Trust as part of the SSH flow).
-* **Execution Environment**: PowerShell 7+ only, Windows OS.
-* **Entry Point**: `run.bat` (generates `.tmp/bootstrap.ps1` to orchestrate main.ps1)
-* **Core Modules**: `main.ps1`, `logging.ps1`, `guard.ps1`, `get-binaries.ps1`, `ssh-tunnel.ps1`, `window-utils.ps1`, `log-retention.ps1`
-* **Config Files**: `.config/config.json`, `.config/ssh.json` (commit-safe placeholders)
-* **Secrets**: `.config/.secret/` (identity key, known_hosts), `.secret/`
-* **License**: Apache 2.0
+## 2. SSH auth window hiding reliability
+- Verify the current hide strategy works under:
+  - `conhost.exe` (classic console)
+  - `OpenConsole.exe` (new console host)
+  - Windows Terminal hosting the main AnniProxy console
+- If further reliability is needed:
+  - add a targeted correlation strategy between `ssh.exe` and its console host window without using broad heuristics that could hide the main terminal.
 
-# --- AI Task Categories --- #
+## 3. Logging improvements
+- Reduce `ALL`-level noise once stable (especially in window hiding / SSH PID selection).
+- Ensure every early-exit path logs a clear next action.
+- Consider adding a short “session summary” line at shutdown (reason + exit code).
 
-## 1. Setup & Bootstrap
+## 4. Config UX
+- Expand first-run prompt to optionally capture:
+  - `socksPort`
+  - `useCloudflaredAccessProxy` guidance
+- Consider a `-ResetLocalConfig` mode that deletes `.config/ssh.local.json` (ask for confirmation).
+- Ensure override merge is well-defined (local overrides always win).
 
-* Ensure PowerShell 7+ detection and bootstrapping is correct.
-* Verify single-instance lock mechanism (`.session.lock`) works reliably.
-* Confirm download/extraction of binaries (`cloudflared`, `brave-portable`, `7zr.exe`) is robust and cache-aware.
-* Monitor `$Global:AnniProxyProvisioned` state to detect new provisioning events.
+## 5. Key provisioning enhancements
+- `-ProvisionKeys` currently generates a keypair; consider:
+  - generating a dedicated `known_hosts` entry via `ssh-keyscan` (optional, network-dependent)
+  - printing a Windows-friendly “copy public key” instruction
+  - optional `-KeyComment` support
 
-## 2. SSH Tunnel Management
+## 6. Health check enhancements
+- Ensure `-HealthCheckOnly` produces actionable output for:
+  - missing `ssh.exe`
+  - missing cloudflared when `useCloudflaredAccessProxy=true`
+  - misconfigured identity file path
+  - port conflicts on `socksPort`
+- Consider an optional “attempt fixes” mode (explicitly opt-in).
 
-* Maintain SOCKS tunnel on `127.0.0.1:<socksPort>`.
-* Prioritize key-based auth; fallback to interactive if necessary.
-* Ensure `Start-SshSocksTunnel` enforces:
+## 7. Automated tests / smoke tests
+- Add a minimal smoke script under `.dev/` that can:
+  - run `-HealthCheckOnly`
+  - run `-ProvisionKeys` in a temp sandbox directory
+  - validate no secrets are created outside `.config/.secret/`
 
-  * BatchMode=yes
-  * Port forwarding correctness
-  * SSH process stdout/stderr captured in `.log/ssh/`
-* Implement readiness detection via `Wait-ForSocksReady`.
-* Maintain lifecycle coupling: if SSH exits, terminate Brave, release lock.
-
-## 3. Browser Launch & Monitoring
-
-* Launch Brave Portable with `--proxy-server=socks5://127.0.0.1:<socksPort>`.
-* Monitor Brave process: on exit, kill SSH tunnel, cleanup, release lock.
-* Apply additional flags if needed (`--start-maximized`, `--disable-extensions`).
-* Ensure no orphaned processes.
-
-## 4. Logging
-
-* Unified logging via `Write-Log`:
-
-  * Session logs: `.log/session/`
-  * SSH logs: `.log/ssh/`
-  * Brave logs: `.log/brave/`
-* Implement retention: keep newest N files, archive older files to `.log/.archive/<category>/`
-* Always log errors before throwing.
-* Maintain color-coded console output.
-* Ensure file logs UTF-8 encoded.
-
-## 5. Window Handling
-
-* Use `Minimize-ProcessWindow -Action Hide` carefully.
-* Hide SSH auth windows without affecting main AnniProxy console or `wt.exe`.
-* Walk process tree + EnumWindows API for reliability.
-
-## 6. Configuration & Secrets
-
-* `.config/config.json` contains URLs, installation options, Scoop usage.
-* `.config/ssh.json` contains SSH connection info; must remain placeholder-safe.
-* Secret files (`identityFile`, `knownHostsFile`) must never be committed.
-* Validate presence of all required binaries before launching.
-
-## 7. Error Handling & Safety
-
-* `$ErrorActionPreference = 'Stop'` enforced in main.ps1.
-* Use try-catch-finally blocks to ensure cleanup.
-* Provide detailed, actionable log messages.
-* Never break AI invariants: single-instance enforcement, lifecycle coupling, secrets safety, window hiding, structured logging.
-
-## 8. Installer & Distribution
-
-* `.src/installer_builder.iss` must include all runtime scripts, assets, configs.
-* Optionally bundle `.bin/` files for offline installation.
-* Verify version number, output paths.
-* Test installer on clean Windows machine.
-
-## 9. AI Invariants & Hard Constraints
-
-* **PowerShell 7+ only**
-* **Single instance lock enforcement**
-* **Coupled lifecycle: SSH and Brave**
-* **Secrets never committed**
-* **Window hiding must not hide main console**
-* **Logging structure must remain**
-
-## 10. Security & Access Control
-
-* (Planned/Optional) Integrate Cloudflare Access for SSO (Google, Microsoft, GitHub, email).
-* Ensure revocation works immediately via Access allow-list.
-* Local SOCKS proxy should remain 127.0.0.1-only.
-* Document clearly in README that the tool is provided "as-is"; developer is not responsible for misuse.
-
-## 11. AI Enhancement Points
-
-* Automate Cloudflared SSO login tracking (optional, for rolling access control).
-* Automate detection of last active user sessions to reduce friction.
-* Verify bootstrapping flow works on fresh Windows 11 VMs.
-* Optionally integrate health checks (`Invoke-HealthCheck`) before tunnel launch.
-* Consider extending logging with session analytics for debugging (user activity anonymized).
-
-## 12. Testing & Validation
-
-* Verify each module individually (`logging.ps1`, `get-binaries.ps1`, `ssh-tunnel.ps1`).
-* Test full workflow via `run.bat`:
-
-  * Lock enforcement
-  * Binary download
-  * SSH tunnel establishment
-  * SOCKS port validation
-  * Brave launch
-  * Graceful shutdown
-* Test log rotation and archiving.
-* Test installer output on clean system.
-* Validate placeholder configs for commit safety.
-
-## 13. Documentation
-
-* Refine README.md for clarity and accuracy, reflecting:
-
-  * Updated workflow
-  * SSO/Cloudflare Access plan
-  * Secrets & configuration guidance
-  * License & legal disclaimers
-* Draft LICENSE.md extension if necessary to clarify "as-is" use and non-liability.
-* Include detailed AI-oriented TODOs for future automation.
-
-# --- End TODO.md --- #
+## 8. Repo hygiene
+- Confirm `.gitignore` patterns cover:
+  - `.config/ssh.local.json`
+  - `.config/.secret/`
+  - `.log/`, `.tmp/`, `.bin/`
+- Ensure README does not claim features that are not implemented.

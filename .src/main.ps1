@@ -7,7 +7,9 @@ param(
     [string]$LogLevel,
     [switch]$NoTimestamp,
     [switch]$OfflineSSHTest,
-    [switch]$UseScoop
+    [switch]$UseScoop,
+    [switch]$HealthCheckOnly,
+    [switch]$ProvisionKeys
 )
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -39,6 +41,13 @@ $finalNoTimestamp = if ($PSBoundParameters.ContainsKey('NoTimestamp')) { $NoTime
 $finalOfflineSSHTest = if ($PSBoundParameters.ContainsKey('OfflineSSHTest')) { $OfflineSSHTest } else { $appConfig.offlineSSHTest }
 $finalUseScoop = if ($PSBoundParameters.ContainsKey('UseScoop')) { $UseScoop } else { $appConfig.useScoop }
 
+$finalUseCloudflaredAccessProxy = $true
+try {
+    if ($null -ne $appConfig.useCloudflaredAccessProxy) {
+        $finalUseCloudflaredAccessProxy = [bool]$appConfig.useCloudflaredAccessProxy
+    }
+} catch {}
+
 $CloudflaredUrl = $appConfig.cloudflaredUrl
 
 $Brave7zUrl     = $appConfig.brave7zUrl
@@ -55,6 +64,72 @@ $SshConfigPath = Join-Path $BaseDir ".config\ssh.json"
 if (-not (Test-Path $SshConfigPath)) { throw "Missing SSH config: $SshConfigPath" }
 
 $sshConfig = Get-Content $SshConfigPath -Raw | ConvertFrom-Json
+
+$SshConfigLocalPath = Join-Path $BaseDir ".config\ssh.local.json"
+if (Test-Path $SshConfigLocalPath) {
+    try {
+        $sshLocal = Get-Content $SshConfigLocalPath -Raw | ConvertFrom-Json
+        foreach ($p in $sshLocal.PSObject.Properties) {
+            try { $sshConfig | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force } catch {}
+        }
+    } catch {
+        throw "Failed to parse SSH override config: $SshConfigLocalPath ($($_.Exception.Message))"
+    }
+}
+
+if (-not (Test-Path $SshConfigLocalPath) -and -not $ProvisionKeys -and -not $HealthCheckOnly) {
+    $hostVal = $null
+    $userVal = $null
+    try { $hostVal = [string]$sshConfig.host } catch {}
+    try { $userVal = [string]$sshConfig.user } catch {}
+
+    $isPlaceholder = $false
+    if ([string]::IsNullOrWhiteSpace($hostVal) -or $hostVal -match "example\.com" -or $hostVal -match "your-ssh") { $isPlaceholder = $true }
+    if ([string]::IsNullOrWhiteSpace($userVal) -or $userVal -match "your-ssh") { $isPlaceholder = $true }
+
+    if ($isPlaceholder) {
+        Write-Host "" 
+        Write-Host "First-time setup: .config/ssh.json is still placeholder." -ForegroundColor Yellow
+        Write-Host "I'll create a gitignored .config/ssh.local.json with your real SSH target." -ForegroundColor Yellow
+
+        $promptUser = Read-Host "SSH username"
+        $promptHost = Read-Host "SSH host (e.g. yme-04.yumehana.dev)"
+        $promptPort = Read-Host "SOCKS port [default: 1080]"
+
+        if ([string]::IsNullOrWhiteSpace($promptUser) -or [string]::IsNullOrWhiteSpace($promptHost)) {
+            throw "SSH username/host not provided; aborting. You can also create .config/ssh.local.json manually."
+        }
+
+        $finalPort = 1080
+        if (-not [string]::IsNullOrWhiteSpace($promptPort)) {
+            $p = 0
+            if (-not [int]::TryParse($promptPort, [ref]$p) -or $p -le 0 -or $p -gt 65535) {
+                throw "Invalid SOCKS port: $promptPort"
+            }
+            $finalPort = $p
+        }
+
+        $localObj = [PSCustomObject]@{
+            user = $promptUser
+            host = $promptHost
+            socksPort = $finalPort
+        }
+
+        try {
+            $json = $localObj | ConvertTo-Json -Depth 3
+            Set-Content -LiteralPath $SshConfigLocalPath -Value $json -Encoding UTF8
+        } catch {
+            throw "Failed to write ${SshConfigLocalPath}: $($_.Exception.Message)"
+        }
+
+        foreach ($p in $localObj.PSObject.Properties) {
+            try { $sshConfig | Add-Member -NotePropertyName $p.Name -NotePropertyValue $p.Value -Force } catch {}
+        }
+
+        Write-Host "Wrote $SshConfigLocalPath" -ForegroundColor Green
+    }
+}
+
 $SshUser   = $sshConfig.user
 $SshHost   = $sshConfig.host
 $SocksPort = $sshConfig.socksPort
@@ -93,6 +168,8 @@ $Global:ShowExitPrompt = $true
 . "$PSScriptRoot/ssh-utils.ps1"
 . "$PSScriptRoot/ssh-tunnel.ps1"
 . "$PSScriptRoot/window-utils.ps1"
+. "$PSScriptRoot/ssh-provision.ps1"
+. "$PSScriptRoot/healthcheck.ps1"
 
 Invoke-LogRetention -LogDirPath $LogDir -MaxFiles 10 -Categories @("session","ssh","brave")
 
@@ -145,11 +222,23 @@ try {
     $SshExe = [string]((Resolve-SshExe -UseScoop:$finalUseScoop -OpenSshZipUrl $OpenSshZipUrl -BinDir $BinDir | Select-Object -First 1))
     $null = Write-Log ("Resolved ssh.exe: {0} (Type: {1})" -f $SshExe, $SshExe.GetType().FullName) "INFO"
 
+    if ($ProvisionKeys) {
+        Invoke-SshKeyProvision -BaseDir $BaseDir -BinDir $BinDir -UseScoop:$finalUseScoop -OpenSshZipUrl $OpenSshZipUrl -IdentityFile $IdentityFile -KnownHostsFile $KnownHostsFile -SshHost $SshHost
+        $Global:ShowExitPrompt = $true
+        return
+    }
+
+    if ($HealthCheckOnly) {
+        $ok = Invoke-HealthCheck -BaseDir $BaseDir -BinDir $BinDir -UseScoop:$finalUseScoop -OpenSshZipUrl $OpenSshZipUrl -CloudflaredDefaultPath $Cloudflared -UseCloudflaredAccessProxy:$finalUseCloudflaredAccessProxy -SshHost $SshHost -SshUser $SshUser -SocksPort $SocksPort -IdentityFile $IdentityFile -KnownHostsFile $KnownHostsFile
+        $Global:ShowExitPrompt = $false
+        if ($ok) { exit 0 } else { exit 2 }
+    }
+
     if ([string]::IsNullOrWhiteSpace($SshHost) -or [string]::IsNullOrWhiteSpace($SshUser)) {
         throw "Invalid .config/ssh.json: 'user' and 'host' must be set"
     }
 
-    if ($SshHost -match "example\\.com" -or $SshHost -match "your-ssh") {
+    if ($SshHost -match "example\.com" -or $SshHost -match "your-ssh") {
         throw "Invalid .config/ssh.json: 'host' is still a placeholder ($SshHost). Set it to your real host (e.g. yme-04.yumehana.dev)."
     }
 
@@ -173,7 +262,7 @@ try {
         }
 
         $Cloudflared = [string]$CloudflaredExe
-        $SshProcess = Start-SshSocksTunnel -SshExe $SshExe -CloudflaredExe $Cloudflared -SocksPort $SocksPort -SshUser $SshUser -SshHost $SshHost -IdentityFile $IdentityFile -KnownHostsFile $KnownHostsFile -BaseDir $BaseDir -LogDir $SshLogDir -Timestamp $Timestamp
+        $SshProcess = Start-SshSocksTunnel -SshExe $SshExe -CloudflaredExe $Cloudflared -UseCloudflaredAccessProxy:$finalUseCloudflaredAccessProxy -SocksPort $SocksPort -SshUser $SshUser -SshHost $SshHost -IdentityFile $IdentityFile -KnownHostsFile $KnownHostsFile -BaseDir $BaseDir -LogDir $SshLogDir -Timestamp $Timestamp
     }
 
     if ($Global:AnniProxyProvisioned -and $env:ANNIPROXY_PROVISION_RESTARTED -ne '1') {

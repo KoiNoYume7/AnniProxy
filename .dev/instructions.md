@@ -1,11 +1,13 @@
 # AI Coding Agent Instructions for AnniProxy
 
 ## PROJECT SUMMARY
-**AnniProxy** is a PowerShell 7+ Windows application that orchestrates a secure, authenticated remote browsing session via SSH SOCKS tunnel. The project bundles three tightly-integrated components: a Cloudflare tunnel (via `cloudflared`), an SSH tunnel, and a Brave portable browser. The entire lifecycle—binary acquisition, tunnel management, browser launch, monitoring, and cleanup—is orchestrated by a single PowerShell script (`main.ps1`) with supporting modules.
+**AnniProxy** is a PowerShell 7+ Windows application that launches a portable browser whose traffic is routed through a **local SSH SOCKS5 tunnel** (localhost-only). The lifecycle—binary acquisition, tunnel management, browser launch, monitoring, and cleanup—is orchestrated by `.src/main.ps1` with supporting modules.
 
 **Key Constraint**: PowerShell 7+ only. No PS 5.1 compatibility. Single-instance execution enforced via `.session.lock`.
 
-**Configuration**: Runtime behavior is driven primarily by `.config/config.json` and `.config/ssh.json`.
+**Configuration layering**:
+- Base (committed): `.config/config.json`, `.config/ssh.json` (placeholder-safe)
+- Override (gitignored): `.config/ssh.local.json` (real host/user, etc.)
 
 **Log organization (current)**: logs are grouped into subfolders under `.log/`:
 
@@ -32,6 +34,12 @@ Behavior:
 - **Fallback**: interactive auth
   - Launches `ssh.exe` in a separate console window so the user can type password/confirm prompts
   - Waits for SOCKS readiness up to 600s
+
+Cloudflare Access integration:
+
+- Optional behavior controlled by `.config/config.json` `useCloudflaredAccessProxy`.
+- When enabled, SSH args include a `ProxyCommand` that routes SSH via `cloudflared access ssh ...`.
+- When disabled, SSH connects directly to the SSH server (no `ProxyCommand`).
 
 Readiness:
 
@@ -104,7 +112,8 @@ run.bat (user launches)
   ├─ Parse CLI args (-NoLogo, -LogLevel, -NoTimestamp)
   ├─ Loads config:
   │   - .config/config.json (app settings + download URLs)
-  │   - .config/ssh.json (ssh target + socksPort)
+  │   - .config/ssh.json (base, placeholder-safe)
+  │   - .config/ssh.local.json (optional override, gitignored)
   ├─ Dot-source modules: logging.ps1, guard.ps1, console-guard.ps1, get-binaries.ps1
   ├─ Initialize global state: $Global:LogFile, $Global:CurrentLogLevelPriority, etc.
   ├─ Write-Log "Starting AnniProxy..."
@@ -113,7 +122,7 @@ run.bat (user launches)
   ├─ Get-Binary brave-portable → .bin/brave-portable/
   ├─ Get-7ZipExe (for extraction, prefers system 7z.exe; falls back to portable 7zr.exe)
   ├─ If provisioning occurred (download/extract), relaunch main.ps1 in a fresh pwsh window and exit current process
-  ├─ Start SSH tunnel process: ssh -N -D 127.0.0.1:1080...
+  ├─ Start SSH tunnel process: ssh -N -D 127.0.0.1:<socksPort> ...
   ├─ Test-Socks (wait up to 20s for tunnel readiness on 127.0.0.1:1080)
   ├─ Start Brave process with --proxy-server=socks5://127.0.0.1:1080
   ├─ Enter process lifecycle monitor loop:
@@ -150,6 +159,8 @@ Other key modules (dot-sourced by main.ps1):
 - exe-resolvers.ps1 (Resolve-CloudflaredExe, Resolve-SshExe)
 - ssh-utils.ps1 (Wait-ForSocksReady, Get-FileTail, etc.)
 - ssh-tunnel.ps1 (Start-SshSocksTunnel + key-auth → interactive fallback)
+- ssh-provision.ps1 (Invoke-SshKeyProvision)
+- healthcheck.ps1 (Invoke-HealthCheck)
 - window-utils.ps1 (Minimize-ProcessWindow -Action Minimize|Hide)
 ```
 
@@ -195,12 +206,16 @@ Only paths and derived values are computed in `.src/main.ps1` (e.g. `.bin/`, `.l
 
 Never add private keys, known_hosts, tokens, etc. into committed files.
 
-**Important**: `.config/ssh.json` is committed and *must remain placeholder-safe*. Do not commit your real SSH username/host into the repo unless that is explicitly intended.
+**Important**:
+- `.config/ssh.json` is committed and *must remain placeholder-safe*.
+- Real SSH host/user belong in `.config/ssh.local.json` (gitignored).
 
 **Execution Parameters (CLI args)**:
 - `-NoLogo` → Skip ASCII art output
 - `-LogLevel {INFO|OK|WARN|ERROR|ALL}` → Filter console messages (case-insensitive)
 - `-NoTimestamp` → Remove timestamps from console logs (file logs always timestamp)
+- `-ProvisionKeys` → Generate SSH keypair and known_hosts skeleton under `.config/.secret/` (no normal run)
+- `-HealthCheckOnly` → Run diagnostics and exit (no normal run)
 
 **Critical Functions**:
 
@@ -428,8 +443,8 @@ Start-Process -FilePath $sevenZipPath -ArgumentList $sevenZipArgs -Wait -PassThr
 
 | Item | File | Key | Purpose |
 |------|------|-----|---------|
-| SSH Host | `.config/ssh.json` | `host` | Remote server hostname |
-| SSH User | `.config/ssh.json` | `user` | Remote login username |
+| SSH Host | `.config/ssh.local.json` | `host` | Remote server hostname (override; gitignored) |
+| SSH User | `.config/ssh.local.json` | `user` | Remote login username (override; gitignored) |
 | SOCKS Port | `.config/ssh.json` | `socksPort` | Local tunnel port (127.0.0.1:$SocksPort) |
 | Cloudflared URL | `.config/config.json` | `cloudflaredUrl` | Download URL for cloudflared binary |
 | Brave URL | `.config/config.json` | `brave7zUrl` | Download URL for Brave portable 7z |
@@ -452,8 +467,8 @@ Start-Process -FilePath $sevenZipPath -ArgumentList $sevenZipArgs -Wait -PassThr
 ### Extension Points (Level 3: New Modules)
 
 **Adding a new module** (example: health check):
-1. Create `.src/health-check.ps1` with exported functions
-2. Add to main.ps1 dot-source block: `. "$PSScriptRoot/health-check.ps1"`
+1. Create `.src/healthcheck.ps1` with exported functions
+2. Add to main.ps1 dot-source block: `. "$PSScriptRoot/healthcheck.ps1"`
 3. Call functions as needed in main flow
 4. Ensure module uses `$Global:` config and `Write-Log` for consistency
 

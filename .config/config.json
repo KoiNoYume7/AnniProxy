@@ -4,6 +4,7 @@
   "noTimestamp": false,
   "offlineSSHTest": false,
   "useScoop": false,
+  "useCloudflaredAccessProxy": true,
   "7zUrl": "https://www.7-zip.org/a/7zr.exe",
   "cloudflaredUrl": "https://github.com/cloudflare/cloudflared/releases/download/2026.2.0/cloudflared-windows-amd64.exe",
   "brave7zUrl": "https://github.com/portapps/brave-portable/releases/download/1.85.118-98/brave-portable-win64-1.85.118-98.7z",

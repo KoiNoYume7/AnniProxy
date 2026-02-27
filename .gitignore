@@ -7,6 +7,6 @@
 .archive/
 .session.lock
 *.exe
-test.ps1
 .secret/
 .config/.secret/
+.config/ssh.local.json

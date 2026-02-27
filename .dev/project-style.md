@@ -1,7 +1,7 @@
 # Repository Organization & PowerShell House Style (based on AnniProxy)
 
 ## Purpose
-This is a **how-to-structure** guide: where files go, how folders are sorted, how things are named, and what PowerShell code should look like to match this repo’s style.
+This is the repo’s **style + structure contract** for AI agents and maintainers: where files go, how folders are sorted, how things are named, and what PowerShell code should look like to match this repo’s conventions.
 
 It’s written as a **general template** (usable for similar PowerShell launchers), with concrete examples taken from this project.
 
@@ -20,6 +20,9 @@ It’s written as a **general template** (usable for similar PowerShell launcher
 - `.config/`
   - **Commit-safe JSON only**.
   - Rule: no secrets, only URLs, toggles, and paths.
+  - Layering rule:
+    - `.config/ssh.json` is placeholder-safe and committed.
+    - `.config/ssh.local.json` is gitignored and contains real host/user overrides.
 - `.assets/`
   - Static resources used by the app (icons, ASCII art scripts, etc.).
 - `.dev/`
@@ -51,7 +54,7 @@ It’s written as a **general template** (usable for similar PowerShell launcher
   - Use **kebab-case** for module scripts: `get-binaries.ps1`, `console-guard.ps1`.
   - Name matches responsibility (verb-noun or noun-noun) and stays stable.
 - **Config**:
-  - Lowercase JSON names: `.config/config.json`, `.config/ssh.json`.
+  - Lowercase JSON names: `.config/config.json`, `.config/ssh.json`, `.config/ssh.local.json`.
 
 ### Function names (PowerShell)
 - Use approved PowerShell verb-noun style where practical:
@@ -82,6 +85,9 @@ Keep these sections in this order:
 - **Config load**:
   - Load JSON using `Get-Content -Raw | ConvertFrom-Json`.
   - Apply CLI overrides (use `$PSBoundParameters.ContainsKey(...)`).
+  - Merge SSH config layering:
+    - read `.config/ssh.json`
+    - overlay `.config/ssh.local.json` when present
 - **Global state init**: log file path, log level threshold, provisioning flags.
 - **Dot-source modules**: `. "$PSScriptRoot/<module>.ps1"`.
 - **Lock + cleanup**:
@@ -101,6 +107,14 @@ Keep these sections in this order:
   - No “app-level” decisions; accept parameters.
   - Logging through `Write-Log` (don’t invent new logging).
 
+Current notable modules (non-exhaustive):
+
+- `ssh-tunnel.ps1` (authoritative SSH arg construction + key auth → interactive fallback)
+- `ssh-provision.ps1` (`Invoke-SshKeyProvision`)
+- `healthcheck.ps1` (`Invoke-HealthCheck`)
+- `window-utils.ps1` (`Minimize-ProcessWindow -Action Minimize|Hide`)
+- `log-retention.ps1` (`Invoke-LogRetention` → archive, never delete)
+
 ## Coding style (PowerShell)
 ### General
 - Target PowerShell **7+** features.
@@ -117,11 +131,23 @@ Keep these sections in this order:
 - Use `Write-Log <message> <level>` where level is one of `INFO`, `OK`, `WARN`, `ERROR`.
 - Keep logs descriptive and action-oriented.
 
+Log file layout is part of the contract:
+
+- `.log/session/` (session logs)
+- `.log/ssh/` (ssh stdout/stderr)
+- `.log/brave/` (brave stdout/stderr)
+- `.log/.archive/<category>/` (archived logs; never delete)
+
 ## Config & secrets layout (project-wide rule)
 - `.config/*.json` must remain commit-safe.
 - Secrets are **files** referenced by path, stored in gitignored folders:
   - `.config/.secret/` (preferred)
   - `.secret/` (also ignored)
+
+Do not commit:
+
+- Real SSH host/user (must be in `.config/ssh.local.json`)
+- Private keys / `known_hosts`
 
 ## What to create when adding new features
 ### Adding a new capability (new module)

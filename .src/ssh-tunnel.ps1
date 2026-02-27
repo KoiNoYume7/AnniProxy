@@ -2,6 +2,7 @@ function Start-SshSocksTunnel {
     param(
         [Parameter(Mandatory=$true)][string]$SshExe,
         [Parameter(Mandatory=$true)][string]$CloudflaredExe,
+        [bool]$UseCloudflaredAccessProxy = $true,
         [Parameter(Mandatory=$true)][int]$SocksPort,
         [Parameter(Mandatory=$true)][string]$SshUser,
         [Parameter(Mandatory=$true)][string]$SshHost,
@@ -44,14 +45,28 @@ function Start-SshSocksTunnel {
         Write-Log "Resolved known_hosts file: $knownHostsPath" "INFO"
     }
 
-    $proxyCommand = "$CloudflaredExe access ssh --hostname %h"
+    $proxyCommand = $null
+    if ($UseCloudflaredAccessProxy) {
+        $proxyCommand = "$CloudflaredExe access ssh --hostname %h"
+        Write-Log "Using cloudflared access ssh ProxyCommand" "INFO"
+    } else {
+        Write-Log "Cloudflared access ssh ProxyCommand disabled; using direct SSH" "INFO"
+    }
 
     $SshArgs = @(
         "-N",
         "-D", "127.0.0.1:$SocksPort",
-        "-o", "ProxyCommand=`"$proxyCommand`"",
         "$SshUser@$SshHost"
     )
+
+    if ($UseCloudflaredAccessProxy -and $proxyCommand) {
+        $SshArgs = @(
+            "-N",
+            "-D", "127.0.0.1:$SocksPort",
+            "-o", "ProxyCommand=`"$proxyCommand`"",
+            "$SshUser@$SshHost"
+        )
+    }
 
     $SshLogOut = Join-Path $LogDir "ssh-$Timestamp.log"
     $SshLogErr = Join-Path $LogDir "ssh-$Timestamp.err"
@@ -63,9 +78,12 @@ function Start-SshSocksTunnel {
             "-i", $identityPath,
             "-o", "BatchMode=yes",
             "-o", "IdentitiesOnly=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ProxyCommand=`"$proxyCommand`""
+            "-o", "StrictHostKeyChecking=accept-new"
         )
+
+        if ($UseCloudflaredAccessProxy -and $proxyCommand) {
+            $SshArgsKey += @("-o", "ProxyCommand=`"$proxyCommand`"")
+        }
 
         if ($knownHostsPath) {
             $SshArgsKey += @("-o", "UserKnownHostsFile=$knownHostsPath")
@@ -111,9 +129,12 @@ function Start-SshSocksTunnel {
         $SshArgsInteractive = @(
             "-N",
             "-D", "127.0.0.1:$SocksPort",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ProxyCommand=`"$proxyCommand`""
+            "-o", "StrictHostKeyChecking=accept-new"
         )
+
+        if ($UseCloudflaredAccessProxy -and $proxyCommand) {
+            $SshArgsInteractive += @("-o", "ProxyCommand=`"$proxyCommand`"")
+        }
 
         if ($identityPath -and (Test-Path $identityPath)) {
             $SshArgsInteractive += @("-i", $identityPath)
