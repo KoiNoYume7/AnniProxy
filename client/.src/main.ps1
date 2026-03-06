@@ -23,7 +23,7 @@ $Global:StopRequested = $false
 $BaseDir     = Split-Path -Parent $PSScriptRoot
 $LogDir      = Join-Path $BaseDir ".log"
 $LockFile    = Join-Path $BaseDir ".session.lock"
-$LogoScript  = Join-Path $BaseDir ".assets\LogoASCII.ps1"
+$LogoScript  = Join-Path $BaseDir ".lib\LogoASCII.ps1"
 $BinDir      = Join-Path $BaseDir ".bin"
 
 # --- load main config --- #
@@ -38,6 +38,10 @@ $finalLogLevel = if ($PSBoundParameters.ContainsKey('LogLevel')) { $LogLevel } e
 $finalNoTimestamp = if ($PSBoundParameters.ContainsKey('NoTimestamp')) { $NoTimestamp } else { $appConfig.noTimestamp }
 $finalOfflineSSHTest = if ($PSBoundParameters.ContainsKey('OfflineSSHTest')) { $OfflineSSHTest } else { $appConfig.offlineSSHTest }
 $finalUseScoop = if ($PSBoundParameters.ContainsKey('UseScoop')) { $UseScoop } else { $appConfig.useScoop }
+$finalAllowPasswordAuth = $false
+try {
+    if ($null -ne $appConfig.allowPasswordAuth) { $finalAllowPasswordAuth = [bool]$appConfig.allowPasswordAuth }
+} catch {}
 
 $CloudflaredUrl = $appConfig.cloudflaredUrl
 
@@ -49,18 +53,6 @@ $Cloudflared    = Join-Path $BinDir "cloudflared\cloudflared.exe"
 $BraveDir       = Join-Path $BinDir "brave-portable"
 $Brave          = Join-Path $BraveDir "brave-portable.exe"
 $Brave7zArchive = Join-Path $BinDir "brave-portable.7z"
-
-# --- load ssh config --- #
-$SshConfigPath = Join-Path $BaseDir ".config\ssh.json"
-if (-not (Test-Path $SshConfigPath)) { throw "Missing SSH config: $SshConfigPath" }
-
-$sshConfig = Get-Content $SshConfigPath -Raw | ConvertFrom-Json
-$SshUser   = $sshConfig.user
-$SshHost   = $sshConfig.host
-$SocksPort = $sshConfig.socksPort
-
-$IdentityFile   = $sshConfig.identityFile
-$KnownHostsFile = $sshConfig.knownHostsFile
 
 # --- logging setup --- #
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
@@ -96,6 +88,67 @@ $Global:ShowExitPrompt = $true
 
 Invoke-LogRetention -LogDirPath $LogDir -MaxFiles 10 -Categories @("session","ssh","brave")
 
+# --- load ssh config --- #
+$SshLocalConfigPath = Join-Path $BaseDir ".config\ssh.local.json"
+$SshConfigPath = Join-Path $BaseDir ".config\ssh.json"
+$SshExampleConfigPath = Join-Path $BaseDir ".config\ssh.example.json"
+
+$sshConfigSourcePath = $null
+if (Test-Path $SshLocalConfigPath) {
+    $sshConfigSourcePath = $SshLocalConfigPath
+} elseif (Test-Path $SshConfigPath) {
+    $sshConfigSourcePath = $SshConfigPath
+}
+
+if ($sshConfigSourcePath) {
+    $sshConfig = Get-Content $sshConfigSourcePath -Raw | ConvertFrom-Json
+} elseif (Test-Path $SshExampleConfigPath) {
+    $sshConfig = Get-Content $SshExampleConfigPath -Raw | ConvertFrom-Json
+} else {
+    $sshConfig = [PSCustomObject]@{
+        user = ""
+        host = ""
+        socksPort = 1080
+        identityFile = ".config/.secret/id_ed25519"
+        knownHostsFile = ".config/.secret/known_hosts"
+    }
+}
+
+$SshUser   = $sshConfig.user
+$SshHost   = $sshConfig.host
+$SocksPort = $sshConfig.socksPort
+
+$IdentityFile   = $sshConfig.identityFile
+$KnownHostsFile = $sshConfig.knownHostsFile
+
+if (-not $finalOfflineSSHTest -and -not $finalAllowPasswordAuth) {
+    $identityFullPath = $null
+    if (-not [string]::IsNullOrWhiteSpace($IdentityFile)) {
+        $identityFullPath = Join-Path $BaseDir $IdentityFile
+    }
+
+    if (-not $identityFullPath -or -not (Test-Path -LiteralPath $identityFullPath)) {
+        Write-Log "" "ERROR"
+        Write-Log "SSH key file not found, but key-based auth is required." "ERROR"
+        Write-Log "" "ERROR"
+        Write-Log "Expected key path:" "WARN"
+        if ($identityFullPath) { Write-Log ("  {0}" -f $identityFullPath) "WARN" }
+        Write-Log "" "ERROR"
+        Write-Log "Tutorial (generate a key):" "WARN"
+        Write-Log "  1) Create the secret folder:" "WARN"
+        Write-Log "     mkdir .config/.secret -Force" "WARN"
+        Write-Log "  2) Generate an Ed25519 key:" "WARN"
+        Write-Log "     ssh-keygen -t ed25519 -f .config/.secret/id_ed25519 -N \"\"" "WARN"
+        Write-Log "  3) Copy .config/.secret/id_ed25519.pub to your SSH server (authorized_keys)." "WARN"
+        Write-Log "" "ERROR"
+        Write-Log "If you prefer password login, set allowPasswordAuth=true in .config/config.json." "WARN"
+        Write-Log "" "ERROR"
+        Write-Host "Press any key to exit..." -ForegroundColor Yellow
+        [void][Console]::ReadKey($true)
+        exit 1
+    }
+}
+
 # --- UI --- #
 $Host.UI.RawUI.WindowTitle = "Yumehana Secure Proxy (Offline SSH Test)"
 
@@ -126,6 +179,24 @@ function Invoke-GracefulShutdown {
     } catch {}
 }
 
+function Remove-EmptyLogFiles {
+    param(
+        [Parameter(Mandatory=$true)][string[]]$Paths
+    )
+
+    foreach ($p in $Paths) {
+        if ([string]::IsNullOrWhiteSpace($p)) { continue }
+        try {
+            if (Test-Path -LiteralPath $p) {
+                $item = Get-Item -LiteralPath $p -ErrorAction SilentlyContinue
+                if ($item -and -not $item.PSIsContainer -and $item.Length -eq 0) {
+                    Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {}
+    }
+}
+
 # --- startup cleanup --- #
 Cleanup-Session -LockFilePath $LockFile -BraveDir $BraveDir -BinDir $BinDir
 
@@ -134,7 +205,7 @@ $SshProcess   = $null
 $BraveProcess = $null
 
 if (-not (Acquire-Lock -LockFilePath $LockFile)) {
-    Write-Host "Cannot acquire session lock. Exiting..." -ForegroundColor Yellow
+    Write-Log "Cannot acquire session lock. Exiting..." "WARN"
     exit
 }
 
@@ -144,14 +215,6 @@ try {
     # --- ensure OpenSSH is available (barebones Win11 safe) --- #
     $SshExe = [string]((Resolve-SshExe -UseScoop:$finalUseScoop -OpenSshZipUrl $OpenSshZipUrl -BinDir $BinDir | Select-Object -First 1))
     $null = Write-Log ("Resolved ssh.exe: {0} (Type: {1})" -f $SshExe, $SshExe.GetType().FullName) "INFO"
-
-    if ([string]::IsNullOrWhiteSpace($SshHost) -or [string]::IsNullOrWhiteSpace($SshUser)) {
-        throw "Invalid .config/ssh.json: 'user' and 'host' must be set"
-    }
-
-    if ($SshHost -match "example\\.com" -or $SshHost -match "your-ssh") {
-        throw "Invalid .config/ssh.json: 'host' is still a placeholder ($SshHost). Set it to your real host (e.g. yme-04.yumehana.dev)."
-    }
 
     # --- ensure Brave Portable is available --- #
     Get-Binary -Name "Brave Portable" -TargetPath $Brave7zArchive -DownloadUrl $Brave7zUrl -Is7zArchive -ExtractDir $BraveDir -UseScoop:$false
@@ -166,6 +229,30 @@ try {
         $SshProcess = [PSCustomObject]@{ Id = 1234; HasExited = $false }
         Write-Log "Offline SSH test mode: simulated SSH tunnel (PID $($SshProcess.Id))" "OK"
     } else {
+        if ([string]::IsNullOrWhiteSpace($SshHost) -or [string]::IsNullOrWhiteSpace($SshUser) -or $SshHost -match "example\\.com" -or $SshHost -match "your-ssh") {
+            $u = Read-Host "SSH user"
+            if ([string]::IsNullOrWhiteSpace($u)) { throw "SSH user cannot be empty" }
+            $h = Read-Host "SSH host"
+            if ([string]::IsNullOrWhiteSpace($h)) { throw "SSH host cannot be empty" }
+
+            $sshConfig.user = $u
+            $sshConfig.host = $h
+
+            $json = $sshConfig | ConvertTo-Json -Depth 10
+            $json | Set-Content -LiteralPath $SshLocalConfigPath -Encoding UTF8
+
+            $SshUser = $sshConfig.user
+            $SshHost = $sshConfig.host
+        }
+
+        if ([string]::IsNullOrWhiteSpace($SshHost) -or [string]::IsNullOrWhiteSpace($SshUser)) {
+            throw "Invalid SSH config: 'user' and 'host' must be set"
+        }
+
+        if ($SshHost -match "example\\.com" -or $SshHost -match "your-ssh") {
+            throw "Invalid SSH config: 'host' is still a placeholder ($SshHost). Set it to your real host."
+        }
+
         $CloudflaredExe = Resolve-CloudflaredExe -UseScoop:$finalUseScoop -DefaultCloudflaredPath $Cloudflared
         if (-not $CloudflaredExe) {
             Get-Binary -Name "cloudflared" -TargetPath $Cloudflared -DownloadUrl $CloudflaredUrl -UseScoop:$false
@@ -254,6 +341,18 @@ try {
     Write-Log "FATAL: $($_.Exception.Message)" "ERROR"
 } finally {
     Invoke-GracefulShutdown
+
+    try {
+        $candidates = @(
+            $Global:LogFile,
+            (Join-Path $SshLogDir "ssh-$Timestamp.log"),
+            (Join-Path $SshLogDir "ssh-$Timestamp.err"),
+            (Join-Path $BraveLogDir "brave-$Timestamp.log"),
+            (Join-Path $BraveLogDir "brave-$Timestamp.err")
+        )
+        Remove-EmptyLogFiles -Paths $candidates
+    } catch {}
+
     Release-Lock -LockFilePath $LockFile
 
     if ($Global:ShowExitPrompt) {

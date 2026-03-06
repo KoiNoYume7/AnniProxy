@@ -3,7 +3,19 @@ setlocal
 
 set BASEDIR=%~dp0
 set LOCAL_PWSH=%BASEDIR%.bin\pwsh7+\pwsh.exe
-set SCRIPT=%BASEDIR%.src\main.ps1
+set SCRIPT=
+if exist "%BASEDIR%client\.src\main.ps1" set SCRIPT=%BASEDIR%client\.src\main.ps1
+if not defined SCRIPT if exist "%BASEDIR%.src\main.ps1" set SCRIPT=%BASEDIR%.src\main.ps1
+if not defined SCRIPT (
+  echo.
+  echo ERROR: Could not find main.ps1.
+  echo Expected one of:
+  echo   %BASEDIR%client\.src\main.ps1
+  echo   %BASEDIR%.src\main.ps1
+  echo.
+  pause
+  exit /b 1
+)
 set CONFIG=%BASEDIR%.config\config.json
 
 set LOGDIR=%BASEDIR%.log

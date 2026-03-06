@@ -15,9 +15,14 @@ function Write-Log {
         [string]$Level = "INFO"
     )
 
-    if ($Global:CurrentLogLevelPriority -gt $Global:LogLevelPriority[$Level]) {
-        return
-    }
+    if ($null -eq $Message) { $Message = "" }
+
+    $shouldConsole = $true
+    try {
+        if ($Global:CurrentLogLevelPriority -gt $Global:LogLevelPriority[$Level]) {
+            $shouldConsole = $false
+        }
+    } catch {}
 
     $timePrefix = if (-not $Global:SuppressTimestamp) { ("[{0:HH:mm:ss}]" -f (Get-Date)) + " " } else { "" }
 
@@ -30,8 +35,12 @@ function Write-Log {
     }
 
     $color = $colorMap[$Level]
-    $consoleLine = "{0}[{1}] {2}" -f $timePrefix, $Level, $Message
-    Write-Host $consoleLine -ForegroundColor $color
+    $levelTag = ("[{0}]" -f $Level).PadRight(7)
+    $consoleLine = "{0}{1}{2}" -f $timePrefix, $levelTag, $Message
+
+    if ($shouldConsole) {
+        Write-Host $consoleLine -ForegroundColor $color
+    }
 
     if ($Global:LogFile) {
         try {
@@ -43,7 +52,7 @@ function Write-Log {
 
 function Message {
     param([string]$Text)
-    Write-Host $Text -ForegroundColor Cyan
+    Write-Log $Text "INFO"
 }
 
 function Register-GlobalErrorLogging {

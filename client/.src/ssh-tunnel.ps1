@@ -49,9 +49,21 @@ function Start-SshSocksTunnel {
     $SshArgs = @(
         "-N",
         "-D", "127.0.0.1:$SocksPort",
+        "-o", "StrictHostKeyChecking=accept-new",
         "-o", "ProxyCommand=`"$proxyCommand`"",
         "$SshUser@$SshHost"
     )
+
+    if ($knownHostsPath) {
+        $SshArgs = @(
+            "-N",
+            "-D", "127.0.0.1:$SocksPort",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "UserKnownHostsFile=$knownHostsPath",
+            "-o", "ProxyCommand=`"$proxyCommand`"",
+            "$SshUser@$SshHost"
+        )
+    }
 
     $SshLogOut = Join-Path $LogDir "ssh-$Timestamp.log"
     $SshLogErr = Join-Path $LogDir "ssh-$Timestamp.err"
@@ -129,6 +141,9 @@ function Start-SshSocksTunnel {
         Write-Log "Falling back to interactive SSH authentication (password allowed)" "WARN"
         Write-Log ("SSH args (interactive): {0}" -f ($SshArgsInteractive -join ' ')) "INFO"
 
+        $SshArgsInteractive += @("-E", $SshLogErr)
+        Write-Log "SSH error log (interactive): $SshLogErr" "INFO"
+
         $sshProc = Start-Process -FilePath $SshExe -ArgumentList $SshArgsInteractive -PassThru
         try {
             $resolved = Get-Process -Id $sshProc.Id -ErrorAction SilentlyContinue
@@ -139,7 +154,24 @@ function Start-SshSocksTunnel {
         Write-Log "Waiting for tunnel readiness (interactive auth can take time)" "INFO"
         $readyInteractive = Wait-ForSocksReady -Process $sshProc -Port $SocksPort -MaxSeconds 600 -Mode "SSH (interactive)"
         if (-not $readyInteractive) {
-            throw "SOCKS proxy failed to start (interactive auth timeout)"
+            $tail = Get-FileTail -Path $SshLogErr -Lines 120
+            if ($tail) {
+                Write-Log "SSH interactive error log tail:" "WARN"
+                foreach ($line in $tail) {
+                    if (-not [string]::IsNullOrWhiteSpace($line)) {
+                        Write-Log ("ssh: {0}" -f $line) "WARN"
+                    }
+                }
+            } else {
+                Write-Log "No SSH interactive error log output captured" "WARN"
+            }
+
+            $exitCode = $null
+            try { if ($sshProc.HasExited) { $exitCode = $sshProc.ExitCode } } catch {}
+            if ($null -ne $exitCode) {
+                throw "SOCKS proxy failed to start (ssh exited early, ExitCode=$exitCode). Check the SSH window for errors (host, user, password auth policy, cloudflared access)."
+            }
+            throw "SOCKS proxy failed to start (interactive auth did not become ready). Check the SSH window for prompts/errors."
         }
 
         return $sshProc
@@ -148,17 +180,33 @@ function Start-SshSocksTunnel {
     Write-Log "Starting SSH in a separate console window to allow credential entry" "INFO"
     Write-Log ("SSH args (interactive): {0}" -f ($SshArgs -join ' ')) "INFO"
 
+    $SshArgs += @("-E", $SshLogErr)
+    Write-Log "SSH error log (interactive): $SshLogErr" "INFO"
+
     $sshProc = Start-Process -FilePath $SshExe -ArgumentList $SshArgs -PassThru
-    try {
-        $resolved = Get-Process -Id $sshProc.Id -ErrorAction SilentlyContinue
-        if ($resolved) { $sshProc = $resolved }
-    } catch {}
     try { Write-Log "SSH process started (interactive) PID $($sshProc.Id) ($($sshProc.ProcessName))" "ALL" } catch {}
 
     Write-Log "Waiting for tunnel readiness (interactive auth can take time)" "INFO"
     $readyInteractive = Wait-ForSocksReady -Process $sshProc -Port $SocksPort -MaxSeconds 600 -Mode "SSH (interactive)"
     if (-not $readyInteractive) {
-        throw "SOCKS proxy failed to start (interactive auth timeout)"
+        $tail = Get-FileTail -Path $SshLogErr -Lines 120
+        if ($tail) {
+            Write-Log "SSH interactive error log tail:" "WARN"
+            foreach ($line in $tail) {
+                if (-not [string]::IsNullOrWhiteSpace($line)) {
+                    Write-Log ("ssh: {0}" -f $line) "WARN"
+                }
+            }
+        } else {
+            Write-Log "No SSH interactive error log output captured" "WARN"
+        }
+
+        $exitCode = $null
+        try { if ($sshProc.HasExited) { $exitCode = $sshProc.ExitCode } } catch {}
+        if ($null -ne $exitCode) {
+            throw "SOCKS proxy failed to start (ssh exited early, ExitCode=$exitCode). Check the SSH window for errors (host, user, password auth policy, cloudflared access)."
+        }
+        throw "SOCKS proxy failed to start (interactive auth did not become ready). Check the SSH window for prompts/errors."
     }
 
     return $sshProc

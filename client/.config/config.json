@@ -3,6 +3,7 @@
   "logLevel": "ALL",
   "noTimestamp": false,
   "offlineSSHTest": false,
+  "allowPasswordAuth": true,
   "useScoop": false,
   "7zUrl": "https://www.7-zip.org/a/7zr.exe",
   "cloudflaredUrl": "https://github.com/cloudflare/cloudflared/releases/download/2026.2.0/cloudflared-windows-amd64.exe",

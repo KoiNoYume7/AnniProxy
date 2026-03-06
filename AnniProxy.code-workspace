@@ -3,11 +3,6 @@
 		{
 			"name": "AnniProxy (main)",
 			"path": "."
-		},
-		{
-			"name": "AnniProxy (backup)",
-			"description": "Backup of original AnniProxy project (pre-refactor) and previous release artifacts | IGNORE THIS IF YOU DON'T HAVE THAT FOLDER",
-			"path": "../AnniProxy.bak"
 		}
 	],
 	"settings": {
